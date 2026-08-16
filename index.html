@@ -22,14 +22,31 @@
 </div>
 
 <script>
-  // DÁN ĐÚNG LINK WEB APP CỦA BẠN VÀO ĐÂY (Kết thúc bằng /exec)
-  const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxJdkQuMz-uumPCoh76BY-N20ULDb25Bwh8QL1yKXJzqDWzS1dUfaz8cSR_Aiqitv6QOA/exec"; 
+  const SCRIPT_URL = "URL_WEB_APP_APPS_SCRIPT_CUA_BAN"; 
+  const SECRET_KEY = "HANA2026"; // Phải trùng với chuỗi bí mật ở Apps Script
 
   const urlParams = new URLSearchParams(window.location.search);
-  const id = urlParams.get('id');
+  const token = urlParams.get('token');
   const box = document.getElementById('box');
 
-  // Hàm xử lý dữ liệu trả về từ Apps Script qua JSONP
+  // Hàm giải mã Token để lấy lại ID gốc
+  function decodeToken(tokenStr) {
+    try {
+      // Decode Base64 (Xử lý hỗ trợ URL Safe)
+      let base64 = tokenStr.replace(/-/g, '+').replace(/_/g, '/');
+      while (base64.length % 4) { base64 += '='; }
+      let decoded = atob(base64);
+      
+      let parts = decoded.split('_');
+      if (parts[0] === SECRET_KEY && parts[1]) {
+        return parts[1]; // Trả về ID thật
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }
+
   function handleResponse(data) {
     if (data.status === "success") {
       box.innerHTML = `
@@ -43,12 +60,14 @@
     }
   }
 
-  if (!id) {
-    box.innerHTML = `<h2 class="error">Mã QR không hợp lệ!</h2>`;
+  const realId = token ? decodeToken(token) : null;
+
+  if (!realId) {
+    box.innerHTML = `<h2 class="error">Mã QR không hợp lệ hoặc đã bị thay đổi!</h2>`;
   } else {
-    // Tạo thẻ script động để gọi JSONP (Giải pháp xuyên rào cản CORS)
+    // Gửi ID đã giải mã tới Apps Script
     const script = document.createElement('script');
-    script.src = `${SCRIPT_URL}?id=${encodeURIComponent(id)}&callback=handleResponse`;
+    script.src = `${SCRIPT_URL}?id=${encodeURIComponent(realId)}&callback=handleResponse`;
     script.onerror = function() {
       box.innerHTML = `<h2 class="error">Có lỗi kết nối máy chủ!</h2>`;
     };
