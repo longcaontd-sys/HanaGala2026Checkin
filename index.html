@@ -47,7 +47,7 @@
         }
       })
       .catch(err => {
-        box.innerHTML = `<h2 class="error">Có lỗi kết nối máy chủ!</h2>`;
+        box.innerHTML = `<h2 class="error">${err.message} Có lỗi kết nối máy chủ!!!</h2>`;
       });
   } 
 </script>
