@@ -54,6 +54,7 @@
         <hr style="border: 0.5px solid #eee; margin: 15px 0;">
         <div class="info"><b>Mã ID:</b> ${data.id}</div>
         <div class="info"><b>Họ và tên:</b> <span style="color: #1565c0;">${data.name || '(Chưa nhập tên)'}</span></div>
+		<div class="info"><b>Bàn:</b> <span style="color: #1565c0;">${data.table || '(Chưa nhập bàn)'}</span></div>
       `;
     } else {
       box.innerHTML = `<h2 class="error">${data.message}</h2>`;
