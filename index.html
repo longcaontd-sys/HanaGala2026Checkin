@@ -1,80 +1,140 @@
 ﻿<!DOCTYPE html>
 <html lang="vi">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Hệ Thống Check-in</title>
-  <style>
-    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f6f9; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-    .card { background: #ffffff; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); text-align: center; max-width: 350px; width: 90%; }
-    .success { color: #2e7d32; }
-    .error { color: #c62828; }
-    .info { font-size: 18px; margin: 10px 0; color: #333; }
-    .loader { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 20px auto; }
-    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-  </style>
-</head>
-<body>
+	<head>
+		<meta charset="UTF-8">
+			<meta name="viewport" content="width=device-width, initial-scale=1.0">
+				<title>Hệ Thống Check-in BTC</title>
+				<style>
+					body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f6f9; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+					.card { background: #ffffff; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); text-align: center; max-width: 360px; width: 90%; }
+					.success { color: #2e7d32; }
+					.error { color: #c62828; }
+					.info { font-size: 18px; margin: 10px 0; color: #333; }
+					.loader { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 20px auto; }
+					@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 
-<div class="card" id="box">
-  <div class="loader" id="loader"></div>
-  <p id="status-text">Đang xử lý Check-in...</p>
-</div>
+					/* Giao diện nhập mật khẩu */
+					input[type="password"] { width: 80%; padding: 12px; font-size: 16px; border: 1px solid #ccc; border-radius: 6px; margin-bottom: 15px; text-align: center; outline: none; }
+					button { background-color: #1565c0; color: white; border: none; padding: 12px 24px; font-size: 16px; border-radius: 6px; cursor: pointer; font-weight: bold; }
+					button:hover { background-color: #0d47a1; }
+					.btn-logout { background-color: #757575; font-size: 12px; padding: 6px 12px; margin-top: 20px; }
+				</style>
+			</head>
+	<body>
 
-<script>
-  const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxqBIlmEsCpi01E-Mm9UUdHrA7sHuR0GjXisz0jxsdMwevsGg2R8SB14EPIcvYeMf9k/exec"; 
-  const SECRET_KEY = "HANA2026"; // Phải trùng với chuỗi bí mật ở Apps Script
+		<div class="card" id="box">
+			<div class="loader" id="loader"></div>
+			<p id="status-text">Đang xác thực thiết bị...</p>
+		</div>
 
-  const urlParams = new URLSearchParams(window.location.search);
-  const token = urlParams.get('token');
-  const box = document.getElementById('box');
+		<script>
+			const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyF2Nip7EdShyuEYtZynvtrQ5L9-WpnYSkkuqK8c9ksJqKhPiQjbvLarnl3-2CRZavLuA/exec"; // Dán đúng URL Web App (/exec)
+			const SECRET_KEY = "HANA2026";
 
-  // Hàm giải mã Token để lấy lại ID gốc
-  function decodeToken(tokenStr) {
-    try {
-      // Decode Base64 (Xử lý hỗ trợ URL Safe)
-      let base64 = tokenStr.replace(/-/g, '+').replace(/_/g, '/');
-      while (base64.length % 4) { base64 += '='; }
-      let decoded = atob(base64);
-      
-      let parts = decoded.split('_');
-      if (parts[0] === SECRET_KEY && parts[1]) {
-        return parts[1]; // Trả về ID thật
-      }
-      return null;
-    } catch (e) {
-      return null;
-    }
-  }
+			const urlParams = new URLSearchParams(window.location.search);
+			const token = urlParams.get('token');
+			const box = document.getElementById('box');
 
-  function handleResponse(data) {
-    if (data.status === "success") {
-      box.innerHTML = `
-        <h1 class="success" style="margin-bottom: 5px;">✓ Check-in Thành Công!</h1>
-        <hr style="border: 0.5px solid #eee; margin: 15px 0;">
-        <div class="info"><b>Mã ID:</b> ${data.id}</div>
-        <div class="info"><b>Họ và tên:</b> <span style="color: #1565c0;">${data.name || '(Chưa nhập tên)'}</span></div>
-		<div class="info"><b>Bàn:</b> <span style="color: #1565c0;">${data.table || '(Chưa nhập bàn)'}</span></div>
-      `;
-    } else {
-      box.innerHTML = `<h2 class="error">${data.message}</h2>`;
-    }
-  }
+			// Lấy mật khẩu đã lưu trên máy thiết bị
+			let btcPass = localStorage.getItem('BTC_CHECKIN_PASS');
 
-  const realId = token ? decodeToken(token) : null;
+			// Hàm giải mã Token
+			function decodeToken(tokenStr) {
+			try {
+			let base64 = tokenStr.replace(/-/g, '+').replace(/_/g, '/');
+			while (base64.length % 4) { base64 += '='; }
+			let decoded = atob(base64);
+			let parts = decoded.split('_');
+			if (parts[0] === SECRET_KEY && parts[1]) {
+			return parts[1];
+			}
+			return null;
+			} catch (e) {
+			return null;
+			}
+			}
 
-  if (!realId) {
-    box.innerHTML = `<h2 class="error">Mã QR không hợp lệ hoặc đã bị thay đổi!</h2>`;
-  } else {
-    // Gửi ID đã giải mã tới Apps Script
-    const script = document.createElement('script');
-    script.src = `${SCRIPT_URL}?id=${encodeURIComponent(realId)}&callback=handleResponse`;
-    script.onerror = function() {
-      box.innerHTML = `<h2 class="error">Có lỗi kết nối máy chủ!</h2>`;
-    };
-    document.body.appendChild(script);
-  }
-</script>
+			// Hàm xử lý dữ liệu trả về từ Apps Script
+			function handleResponse(data) {
+			if (data.status === "success") {
+			box.innerHTML = `
+			<h1 class="success" style="margin-bottom: 5px;">✓ Check-in Thành Công!</h1>
+			<hr style="border: 0.5px solid #eee; margin: 15px 0;">
+				<div class="info">
+					<b>Mã ID:</b> ${data.id}
+				</div>
+				<div class="info">
+					<b>Họ và tên:</b>
+					<span style="color: #1565c0;">${data.name || '(Chưa nhập tên)'}</span>
+				</div>
+				<button class="btn-logout" onclick="logoutBTC()">Đăng xuất BTC</button>
+				`;
+				} else if (data.status === "unauthorized") {
+				// Mật khẩu sai hoặc chưa nhập -> Hiển thị form nhập lại
+				localStorage.removeItem('BTC_CHECKIN_PASS');
+				showPasswordForm("Mật khẩu BTC không chính xác! Vui lòng thử lại.");
+				} else {
+				box.innerHTML = `
+				<h2 class="error">${data.message}</h2>
+				<button class="btn-logout" onclick="logoutBTC()">Đăng xuất BTC</button>
+				`;
+				}
+				}
 
-</body>
+				// Hiển thị Form nhập mật khẩu BTC
+				function showPasswordForm(msg = "") {
+				box.innerHTML = `
+				<h2 style="color: #1565c0; margin-top: 0;">🔒 Xác Thực Ban Tổ Chức</h2>
+				<p style="font-size: 14px; color: #666;">Chỉ thành viên BTC mới có quyền thực hiện check-in.</p>
+				${msg ? `<p class="error" style="font-size: 14px;">
+					<b>${msg}</b>
+				</p>` : ''}
+				<input type="password" id="passInput" placeholder="Nhập Mật khẩu BTC..." />
+				<br>
+					<button onclick="submitPassword()">Xác Nhận</button>
+					`;
+					}
+
+					// Lưu mật khẩu và thực hiện check-in
+					function submitPassword() {
+					const inputVal = document.getElementById('passInput').value;
+					if (!inputVal) return;
+					localStorage.setItem('BTC_CHECKIN_PASS', inputVal);
+					btcPass = inputVal;
+					box.innerHTML = `<div class="loader"></div><p>Đang xử lý Check-in...</p>`;
+					processCheckin();
+					}
+
+					// Đăng xuất khỏi thiết bị
+					function logoutBTC() {
+					localStorage.removeItem('BTC_CHECKIN_PASS');
+					alert("Đã đăng xuất tài khoản BTC khỏi thiết bị!");
+					location.reload();
+					}
+
+					// Hàm gọi Check-in về Apps Script
+					function processCheckin() {
+					const realId = token ? decodeToken(token) : null;
+					if (!realId) {
+					box.innerHTML = `<h2 class="error">Mã QR không hợp lệ!</h2>`;
+					return;
+					}
+
+					const script = document.createElement('script');
+					script.src = `${SCRIPT_URL}?id=${encodeURIComponent(realId)}&pass=${encodeURIComponent(btcPass)}&callback=handleResponse`;
+					script.onerror = function() {
+					box.innerHTML = `<h2 class="error">Có lỗi kết nối máy chủ!</h2>`;
+					};
+					document.body.appendChild(script);
+					}
+
+					// KIỂM TRA LUỒNG CHẠY BAN ĐẦU
+					if (!btcPass) {
+					showPasswordForm();
+					} else {
+					processCheckin();
+					}
+				</script>
+
+	</body>
 </html>
