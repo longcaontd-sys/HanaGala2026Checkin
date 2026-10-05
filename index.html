@@ -67,6 +67,10 @@
 					<b>Họ và tên:</b>
 					<span style="color: #1565c0;">${data.name || '(Chưa nhập tên)'}</span>
 				</div>
+				<div class="info">
+					<b>Bàn:</b>
+					<span style="color: #1565c0;">${data.table || '(Chưa nhập bàn)'}</span>
+				</div>
 				<button class="btn-logout" onclick="logoutBTC()">Đăng xuất BTC</button>
 				`;
 				} else if (data.status === "unauthorized") {
