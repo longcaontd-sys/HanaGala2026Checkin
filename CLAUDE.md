@@ -8,9 +8,10 @@ QR check-in page for the Hana Gala 2026 event, used by organizer staff (BTC, "Ba
 
 ## Architecture / flow
 
+0. The page has two entry modes. **With `?token=`** (guest QR opened by a phone's camera app) it checks that guest in immediately. **Without a token** it is a scanner: `html5-qrcode` (jsDelivr CDN, pinned 2.3.8) runs the rear camera inside the page. Each read is paused (`busy` flag + `qr.pause`), checked in, then "Quét mã tiếp" resumes the same camera stream and strips `?token=` from the URL so a reload can't re-check-in. Camera needs HTTPS (GitHub Pages) or localhost, and the built-in browser pane blocks it, so test real scanning on a phone and simulate reads with `onScanSuccess('<qr text>')` from the console.
 1. A guest's QR code encodes a URL like `index.html?token=<base64url>`. The token decodes (URL-safe base64, padding restored) to `"<SECRET_KEY>_<guestId>"`; `decodeToken` rejects tokens whose prefix isn't `SECRET_KEY` (`"HANA2026"`). Any tool that generates QR codes must use this same format.
 2. Staff devices are authorized by **device ID**, not a password. On first load the page generates a random ID (`BTC-XXXX-XXXX`) and stores it in `localStorage` under `BTC_DEVICE_ID`. Clearing site data or switching browser gives the device a new ID. Admins allow a device by adding its ID to the **"Thiết bị BTC"** tab of the spreadsheet (column A = ID, column C = "allowed" checkbox).
-3. `processCheckin` calls the Google Apps Script Web App (`SCRIPT_URL`, must be the `/exec` URL) via **JSONP**: it injects a `<script>` tag with `?id=&device=&callback=handleResponse`. That is why the response handler must stay a global function named `handleResponse`.
+3. `processCheckin` calls the Google Apps Script Web App (`SCRIPT_URL`, must be the `/exec` URL) via **JSONP**: it injects a `<script>` tag with `?id=&device=&callback=handleResponse`. That is why the response handler must stay a global function named `handleResponse`. Only one request is in flight at a time (`pending`); it times out after `REQUEST_TIMEOUT_MS`, and late responses are ignored.
 4. `handleResponse` expects `{status: "success", id, name, table}`, `{status: "unauthorized"}` (shows "Không có quyền check-in" plus the device ID so staff can send it to an admin), or any other status with a `message` that is shown as an error.
 
 ## Backend (Google Apps Script + Sheets)

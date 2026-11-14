@@ -5,8 +5,8 @@
 		<meta name="viewport" content="width=device-width, initial-scale=1.0">
 		<title>Hệ Thống Check-in BTC</title>
 		<style>
-			body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f6f9; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-			.card { background: #ffffff; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); text-align: center; max-width: 360px; width: 90%; }
+			body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f6f9; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+			.card { background: #ffffff; padding: 24px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); text-align: center; max-width: 380px; width: 90%; box-sizing: border-box; }
 			.success { color: #2e7d32; }
 			.error { color: #c62828; }
 			.info { font-size: 18px; margin: 10px 0; color: #333; }
@@ -19,23 +19,45 @@
 			.device-small { font-size: 12px; color: #999; margin-top: 20px; }
 			button { background-color: #1565c0; color: white; border: none; padding: 10px 20px; font-size: 14px; border-radius: 6px; cursor: pointer; font-weight: bold; margin-top: 15px; }
 			button:hover { background-color: #0d47a1; }
+			.btn-big { width: 100%; padding: 14px; font-size: 18px; }
+
+			/* Chế độ quét QR */
+			.scan-title { color: #1565c0; margin: 0 0 12px; font-size: 20px; }
+			#reader { width: 100%; border-radius: 8px; overflow: hidden; background: #000; min-height: 200px; }
+			#reader video { width: 100% !important; border-radius: 8px; }
+			.scan-hint { font-size: 14px; color: #666; margin: 12px 0 0; }
+			.hidden { display: none; }
 		</style>
 	</head>
 	<body>
 
-		<div class="card" id="box">
-			<div class="loader" id="loader"></div>
-			<p id="status-text">Đang xác thực thiết bị...</p>
+		<div class="card">
+			<!-- Khu vực quét QR (giữ nguyên trong DOM để camera không phải khởi động lại) -->
+			<div id="scanner" class="hidden">
+				<h2 class="scan-title">📷 Quét mã QR check-in</h2>
+				<div id="reader"></div>
+				<p class="scan-hint" id="scan-hint">Đang mở camera...</p>
+			</div>
+
+			<!-- Khu vực hiển thị kết quả -->
+			<div id="box">
+				<div class="loader"></div>
+				<p>Đang xác thực thiết bị...</p>
+			</div>
 		</div>
 
+		<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 		<script>
 			const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyA2sQ2wTgO9ELiw-AC6QTY3cnvXlRkl8lqmlaxOq_D8-6W-KtXZ8eRlWlciS1g4oh-Ng/exec"; // Dán đúng URL Web App (/exec)
 			const SECRET_KEY = "HANA2026";
 			const DEVICE_KEY = 'BTC_DEVICE_ID';
+			const REQUEST_TIMEOUT_MS = 25000; // Apps Script "khởi động nguội" có thể mất vài giây
 
 			const urlParams = new URLSearchParams(window.location.search);
 			const token = urlParams.get('token');
 			const box = document.getElementById('box');
+			const scannerEl = document.getElementById('scanner');
+			const scanHint = document.getElementById('scan-hint');
 
 			// Lấy (hoặc tạo mới) ID thiết bị, lưu cố định trên trình duyệt của máy.
 			// Dạng: BTC-XXXX-XXXX (bỏ các ký tự dễ nhầm như 0/O, 1/I/L).
@@ -72,18 +94,39 @@
 				}
 			}
 
+			// Lấy token từ nội dung mã QR (QR chứa link .../?token=..., hoặc chỉ chứa token)
+			function tokenFromQrText(text) {
+				text = (text || '').trim();
+				try {
+					const t = new URL(text).searchParams.get('token');
+					if (t) return t;
+				} catch (e) {}
+				return text;
+			}
+
 			function deviceFooter() {
 				return `<div class="device-small">ID thiết bị: ${deviceId}</div>`;
 			}
 
+			function scanNextButton() {
+				return `<button class="btn-big" onclick="startScanMode()">📷 Quét mã tiếp</button>`;
+			}
+
+			function showResult(html) {
+				scannerEl.classList.add('hidden');
+				box.classList.remove('hidden');
+				box.innerHTML = html;
+			}
+
 			// Hiển thị khi thiết bị chưa được cấp quyền trong tab "Thiết bị BTC"
 			function showNoPermission() {
-				box.innerHTML = `
+				showResult(`
 					<h2 class="error" style="margin-top: 0;">Không có quyền check-in</h2>
 					<div class="device-label">ID thiết bị:</div>
 					<div class="device-id" id="deviceIdText">${deviceId}</div>
 					<button onclick="copyDeviceId()" id="copyBtn">Sao chép ID</button>
-				`;
+					${scanNextButton()}
+				`);
 			}
 
 			function copyDeviceId() {
@@ -101,11 +144,29 @@
 				}
 			}
 
+			function vibrate(pattern) {
+				try { if (navigator.vibrate) navigator.vibrate(pattern); } catch (e) {}
+			}
+
+			// ==================== GỌI CHECK-IN VỀ APPS SCRIPT (JSONP) ====================
+			let pending = null; // { timer, script } của yêu cầu đang chờ
+
+			function finishPending() {
+				if (!pending) return false;
+				clearTimeout(pending.timer);
+				pending.script.remove();
+				pending = null;
+				return true;
+			}
+
 			// Hàm xử lý dữ liệu trả về từ Apps Script
 			function handleResponse(data) {
+				if (!finishPending()) return; // Bỏ qua phản hồi đến muộn (đã báo lỗi quá thời gian)
+
 				if (data.status === "success") {
-					box.innerHTML = `
-						<h1 class="success" style="margin-bottom: 5px;">✓ Check-in Thành Công!</h1>
+					vibrate(150);
+					showResult(`
+						<h1 class="success" style="margin: 0 0 5px;">✓ Check-in Thành Công!</h1>
 						<hr style="border: 0.5px solid #eee; margin: 15px 0;">
 						<div class="info">
 							<b>Mã ID:</b> ${data.id}
@@ -118,38 +179,108 @@
 							<b>Bàn:</b>
 							<span style="color: #1565c0;">${data.table || '(Chưa nhập bàn)'}</span>
 						</div>
+						${scanNextButton()}
 						${deviceFooter()}
-					`;
+					`);
 				} else if (data.status === "unauthorized") {
+					vibrate([100, 80, 100]);
 					showNoPermission();
 				} else {
-					box.innerHTML = `
-						<h2 class="error">${data.message}</h2>
+					vibrate([100, 80, 100]);
+					showResult(`
+						<h2 class="error" style="margin-top: 0;">${data.message}</h2>
+						${scanNextButton()}
 						${deviceFooter()}
-					`;
+					`);
 				}
 			}
 
-			// Hàm gọi Check-in về Apps Script (gửi kèm ID thiết bị thay cho mật khẩu)
-			function processCheckin() {
-				const realId = token ? decodeToken(token) : null;
+			// Gửi check-in cho một ID khách (gửi kèm ID thiết bị thay cho mật khẩu)
+			function processCheckin(realId) {
 				if (!realId) {
-					box.innerHTML = `<h2 class="error">Mã QR không hợp lệ!</h2>${deviceFooter()}`;
+					vibrate([100, 80, 100]);
+					showResult(`<h2 class="error" style="margin-top: 0;">Mã QR không hợp lệ!</h2>${scanNextButton()}${deviceFooter()}`);
 					return;
 				}
 
+				showResult(`<div class="loader"></div><p>Đang check-in...</p>`);
+				finishPending();
+
 				const script = document.createElement('script');
 				script.src = `${SCRIPT_URL}?id=${encodeURIComponent(realId)}&device=${encodeURIComponent(deviceId)}&callback=handleResponse`;
-				script.onerror = function() {
-					box.innerHTML = `<h2 class="error">Có lỗi kết nối máy chủ!</h2>`;
+				const fail = function() {
+					if (!finishPending()) return;
+					showResult(`<h2 class="error" style="margin-top: 0;">Có lỗi kết nối máy chủ!</h2>${scanNextButton()}`);
 				};
+				script.onerror = fail;
+				pending = { script: script, timer: setTimeout(fail, REQUEST_TIMEOUT_MS) };
 				document.body.appendChild(script);
+			}
+
+			// ==================== CHẾ ĐỘ QUÉT QR BẰNG CAMERA ====================
+			let qr = null;          // Html5Qrcode instance
+			let scanning = false;   // camera đang chạy (kể cả lúc tạm dừng)
+			let busy = false;       // đã đọc được mã, đang xử lý -> bỏ qua các lần đọc tiếp
+
+			function onScanSuccess(text) {
+				if (busy) return;
+				busy = true;
+				try { qr.pause(true); } catch (e) {}
+				processCheckin(decodeToken(tokenFromQrText(text)));
+			}
+
+			function showCameraError(err) {
+				scanning = false;
+				scanHint.innerHTML = `<span class="error"><b>Không mở được camera.</b><br>Hãy cho phép trang truy cập camera rồi thử lại.</span>`
+					+ `<br><button onclick="startScanMode()">Thử lại</button>`;
+				console.error(err);
+			}
+
+			function startScanMode() {
+				// Bỏ ?token=... khỏi địa chỉ để tải lại trang không check-in lại khách cũ
+				if (window.location.search) {
+					history.replaceState(null, '', window.location.pathname);
+				}
+
+				box.classList.add('hidden');
+				scannerEl.classList.remove('hidden');
+				busy = false;
+
+				if (typeof Html5Qrcode === 'undefined') {
+					showCameraError('Không tải được thư viện quét QR');
+					return;
+				}
+
+				if (scanning) {
+					try { qr.resume(); } catch (e) {}
+					scanHint.textContent = 'Đưa mã QR vào khung để check-in';
+					return;
+				}
+
+				if (!qr) qr = new Html5Qrcode('reader', { verbose: false });
+				scanHint.textContent = 'Đang mở camera...';
+				qr.start(
+					{ facingMode: 'environment' },
+					{ fps: 10, qrbox: function(w, h) { const s = Math.floor(Math.min(w, h) * 0.7); return { width: s, height: s }; } },
+					onScanSuccess,
+					function() {} // không đọc được mã ở khung hình này - bỏ qua
+				).then(function() {
+					scanning = true;
+					scanHint.textContent = 'Đưa mã QR vào khung để check-in';
+				}).catch(showCameraError);
 			}
 
 			// Dọn mật khẩu cũ (không còn dùng) nếu còn lưu trên máy
 			try { localStorage.removeItem('BTC_CHECKIN_PASS'); } catch (e) {}
 
-			processCheckin();
+			// KIỂM TRA LUỒNG CHẠY BAN ĐẦU:
+			// - Mở từ link trong QR (có ?token=) -> check-in ngay khách đó.
+			// - Mở trang không có token -> vào chế độ quét QR bằng camera.
+			if (token) {
+				processCheckin(decodeToken(token));
+			} else {
+				startScanMode();
+			}
 		</script>
 
 	</body>
