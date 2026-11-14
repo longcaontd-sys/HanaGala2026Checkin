@@ -23,10 +23,21 @@
 
 			/* Chế độ quét QR */
 			.scan-title { color: #1565c0; margin: 0 0 12px; font-size: 20px; }
-			#reader { width: 100%; border-radius: 8px; overflow: hidden; background: #000; min-height: 200px; }
-			#reader video { width: 100% !important; border-radius: 8px; }
+			/* Khung vuông: video phủ kín (object-fit: cover) -> phần nhìn thấy = hình vuông ở giữa khung hình camera */
+			#reader { position: relative; width: 100%; aspect-ratio: 1 / 1; border-radius: 8px; overflow: hidden; background: #000; }
+			#video { width: 100%; height: 100%; object-fit: cover; display: block; }
+			/* Ô ngắm = đúng vùng được giải mã (SCAN_FRACTION của cạnh ngắn) */
+			.scan-frame { position: absolute; left: 50%; top: 50%; width: 80%; height: 80%; transform: translate(-50%, -50%); border: 3px solid rgba(255,255,255,0.9); border-radius: 12px; box-shadow: 0 0 0 9999px rgba(0,0,0,0.3); pointer-events: none; }
 			.scan-hint { font-size: 14px; color: #666; margin: 12px 0 0; }
-			.hidden { display: none; }
+			.hidden { display: none !important; }
+
+			/* Điều khiển camera: chọn camera + zoom */
+			.cam-controls { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+			.cam-controls select { width: 100%; padding: 8px; font-size: 14px; border: 1px solid #ccc; border-radius: 6px; background: #fff; }
+			.zoom-wrap { display: flex; align-items: center; gap: 10px; font-size: 14px; color: #333; }
+			.zoom-wrap input { flex: 1; }
+			.zoom-val { min-width: 38px; text-align: right; font-weight: bold; color: #1565c0; }
+			.scan-tip { font-size: 12px; color: #999; margin: 8px 0 0; }
 		</style>
 	</head>
 	<body>
@@ -35,8 +46,20 @@
 			<!-- Khu vực quét QR (giữ nguyên trong DOM để camera không phải khởi động lại) -->
 			<div id="scanner" class="hidden">
 				<h2 class="scan-title">📷 Quét mã QR check-in</h2>
-				<div id="reader"></div>
+				<div id="reader">
+					<video id="video" playsinline muted autoplay></video>
+					<div class="scan-frame"></div>
+				</div>
 				<p class="scan-hint" id="scan-hint">Đang mở camera...</p>
+				<div class="cam-controls">
+					<div class="zoom-wrap hidden" id="zoom-wrap">
+						<span>🔍 Zoom</span>
+						<input type="range" id="zoom" min="1" max="1" step="0.1" value="1">
+						<span class="zoom-val" id="zoom-val">1x</span>
+					</div>
+					<select id="camera-select" class="hidden" aria-label="Chọn camera"></select>
+				</div>
+				<p class="scan-tip">Mã QR nhỏ: giữ máy cách 15–25 cm rồi tăng zoom, chạm vào hình để lấy nét lại, hoặc thử camera khác.</p>
 			</div>
 
 			<!-- Khu vực hiển thị kết quả -->
@@ -46,7 +69,7 @@
 			</div>
 		</div>
 
-		<script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+		<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
 		<script>
 			const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyA2sQ2wTgO9ELiw-AC6QTY3cnvXlRkl8lqmlaxOq_D8-6W-KtXZ8eRlWlciS1g4oh-Ng/exec"; // Dán đúng URL Web App (/exec)
 			const SECRET_KEY = "HANA2026";
@@ -59,11 +82,14 @@
 			const scannerEl = document.getElementById('scanner');
 			const scanHint = document.getElementById('scan-hint');
 
+			function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+			function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+			function lsDel(k) { try { localStorage.removeItem(k); } catch (e) {} }
+
 			// Lấy (hoặc tạo mới) ID thiết bị, lưu cố định trên trình duyệt của máy.
 			// Dạng: BTC-XXXX-XXXX (bỏ các ký tự dễ nhầm như 0/O, 1/I/L).
 			function getDeviceId() {
-				let id = null;
-				try { id = localStorage.getItem(DEVICE_KEY); } catch (e) {}
+				let id = lsGet(DEVICE_KEY);
 				if (id) return id;
 
 				const chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
@@ -73,7 +99,7 @@
 				for (let i = 0; i < bytes.length; i++) s += chars[bytes[i] % chars.length];
 				id = 'BTC-' + s.slice(0, 4) + '-' + s.slice(4);
 
-				try { localStorage.setItem(DEVICE_KEY, id); } catch (e) {}
+				lsSet(DEVICE_KEY, id);
 				return id;
 			}
 			const deviceId = getDeviceId();
@@ -218,25 +244,223 @@
 			}
 
 			// ==================== CHẾ ĐỘ QUÉT QR BẰNG CAMERA ====================
-			let qr = null;          // Html5Qrcode instance
-			let scanning = false;   // camera đang chạy (kể cả lúc tạm dừng)
-			let busy = false;       // đã đọc được mã, đang xử lý -> bỏ qua các lần đọc tiếp
+			// Tự đọc khung hình camera ở ĐỘ PHÂN GIẢI GỐC (không thu nhỏ theo kích thước màn hình)
+			// để QR nhỏ vẫn đủ chi tiết. Ưu tiên BarcodeDetector có sẵn của trình duyệt
+			// (Android Chrome), nếu không có thì dùng jsQR.
+			const CAMERA_KEY = 'BTC_CAMERA_ID';   // camera đã chọn trên máy này
+			const ZOOM_KEY = 'BTC_CAMERA_ZOOM';   // mức zoom đã chọn
+			const SCAN_FRACTION = 0.8;            // vùng giải mã = 80% cạnh ngắn (khớp .scan-frame)
+			const MAX_DECODE_SIDE = 1000;         // giới hạn kích thước ảnh đưa vào jsQR (tốc độ)
+			const SCAN_INTERVAL_MS = 80;
+
+			const video = document.getElementById('video');
+			const zoomWrap = document.getElementById('zoom-wrap');
+			const zoomInput = document.getElementById('zoom');
+			const zoomVal = document.getElementById('zoom-val');
+			const cameraSelect = document.getElementById('camera-select');
+			const decodeCanvas = document.createElement('canvas');
+			const decodeCtx = decodeCanvas.getContext('2d', { willReadFrequently: true });
+
+			let stream = null;      // MediaStream đang chạy
+			let track = null;       // video track đang chạy
+			let trackCaps = {};     // khả năng của camera (zoom, focusMode...)
+			let busy = true;        // true = không giải mã (đang xử lý kết quả / camera chưa sẵn sàng)
+			let loopTimer = null;
+			let detector = null;    // BarcodeDetector nếu trình duyệt hỗ trợ QR
+
+			async function initDetector() {
+				try {
+					if ('BarcodeDetector' in window) {
+						const formats = await BarcodeDetector.getSupportedFormats();
+						if (formats.indexOf('qr_code') !== -1) detector = new BarcodeDetector({ formats: ['qr_code'] });
+					}
+				} catch (e) { detector = null; }
+			}
+
+			// Yêu cầu camera độ phân giải cao (QR nhỏ cần nhiều điểm ảnh) + tự lấy nét liên tục.
+			function buildVideoConstraints() {
+				const c = {
+					width: { ideal: 1920 },
+					height: { ideal: 1080 },
+					advanced: [{ focusMode: 'continuous' }]
+				};
+				const savedId = lsGet(CAMERA_KEY);
+				if (savedId) c.deviceId = { exact: savedId };
+				else c.facingMode = { ideal: 'environment' };
+				return c;
+			}
+
+			function applyConstraint(obj) {
+				if (!track || !track.applyConstraints) return Promise.resolve();
+				return track.applyConstraints({ advanced: [obj] }).catch(function() {});
+			}
+
+			// Sau khi camera chạy: bật lấy nét liên tục, hiện thanh zoom nếu máy hỗ trợ.
+			function enhanceCamera() {
+				trackCaps = {};
+				try { trackCaps = (track.getCapabilities && track.getCapabilities()) || {}; } catch (e) {}
+
+				const focusModes = trackCaps.focusMode || [];
+				if (focusModes.indexOf('continuous') !== -1) applyConstraint({ focusMode: 'continuous' });
+
+				const z = trackCaps.zoom;
+				if (z && typeof z.max === 'number' && z.max > z.min) {
+					const max = Math.min(z.max, 8); // trên 8x thường quá nhiễu
+					zoomInput.min = z.min;
+					zoomInput.max = max;
+					zoomInput.step = z.step || 0.1;
+					let v = parseFloat(lsGet(ZOOM_KEY));
+					if (!(v >= z.min && v <= max)) v = z.min;
+					zoomInput.value = v;
+					showZoom(v);
+					if (v !== z.min) applyConstraint({ zoom: v });
+					zoomWrap.classList.remove('hidden');
+				} else {
+					zoomWrap.classList.add('hidden');
+				}
+			}
+
+			function showZoom(v) { zoomVal.textContent = (Math.round(v * 10) / 10) + 'x'; }
+
+			zoomInput.addEventListener('input', function() {
+				const v = parseFloat(zoomInput.value);
+				showZoom(v);
+				applyConstraint({ zoom: v });
+				lsSet(ZOOM_KEY, String(v));
+			});
+
+			// Chạm vào hình camera để lấy nét lại (Android Chrome hỗ trợ; máy khác bỏ qua).
+			document.getElementById('reader').addEventListener('click', function() {
+				const modes = trackCaps.focusMode || [];
+				if (modes.indexOf('single-shot') === -1) return;
+				applyConstraint({ focusMode: 'single-shot' }).then(function() {
+					if (modes.indexOf('continuous') !== -1) setTimeout(function() { applyConstraint({ focusMode: 'continuous' }); }, 1500);
+				});
+				scanHint.textContent = 'Đang lấy nét...';
+				setTimeout(function() { if (track && !busy) scanHint.textContent = 'Đưa mã QR vào khung để check-in'; }, 1500);
+			});
+
+			// Danh sách camera: nhiều điện thoại có 2–4 camera sau; camera mặc định có thể
+			// là camera góc rộng không lấy nét gần được. Cho BTC chọn camera khác.
+			async function fillCameraList() {
+				try {
+					const cams = (await navigator.mediaDevices.enumerateDevices()).filter(function(d) { return d.kind === 'videoinput'; });
+					if (cams.length < 2) { cameraSelect.classList.add('hidden'); return; }
+					let currentId = null;
+					try { currentId = track.getSettings().deviceId; } catch (e) {}
+					cameraSelect.innerHTML = '';
+					cams.forEach(function(cam, i) {
+						const opt = document.createElement('option');
+						opt.value = cam.deviceId;
+						opt.textContent = '📷 ' + (cam.label || ('Camera ' + (i + 1)));
+						if (cam.deviceId === currentId) opt.selected = true;
+						cameraSelect.appendChild(opt);
+					});
+					cameraSelect.classList.remove('hidden');
+				} catch (e) { cameraSelect.classList.add('hidden'); }
+			}
+
+			cameraSelect.addEventListener('change', function() {
+				lsSet(CAMERA_KEY, cameraSelect.value);
+				lsDel(ZOOM_KEY); // mỗi camera có dải zoom khác nhau
+				stopCamera();
+				startCamera();
+			});
+
+			function stopCamera() {
+				busy = true;
+				clearTimeout(loopTimer);
+				if (stream) stream.getTracks().forEach(function(t) { t.stop(); });
+				stream = null;
+				track = null;
+				video.srcObject = null;
+			}
+
+			async function startCamera() {
+				scanHint.textContent = 'Đang mở camera...';
+				zoomWrap.classList.add('hidden');
+				if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+					showCameraError('Trình duyệt không hỗ trợ camera');
+					return;
+				}
+				try {
+					stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: buildVideoConstraints() });
+				} catch (err) {
+					// Camera đã lưu không còn (đổi máy/cập nhật) -> thử lại với camera sau mặc định
+					if (lsGet(CAMERA_KEY) && err && (err.name === 'OverconstrainedError' || err.name === 'NotFoundError' || err.name === 'NotReadableError')) {
+						lsDel(CAMERA_KEY);
+						lsDel(ZOOM_KEY);
+						return startCamera();
+					}
+					showCameraError(err);
+					return;
+				}
+				track = stream.getVideoTracks()[0];
+				video.srcObject = stream;
+				try { await video.play(); } catch (e) {}
+				scanHint.textContent = 'Đưa mã QR vào khung để check-in';
+				enhanceCamera();
+				fillCameraList();
+				busy = false;
+				scheduleScan(0);
+			}
+
+			function scheduleScan(delay) {
+				clearTimeout(loopTimer);
+				loopTimer = setTimeout(scanFrame, delay);
+			}
+
+			async function scanFrame() {
+				if (busy || !track) return;
+				const vw = video.videoWidth, vh = video.videoHeight;
+				if (!vw || !vh || video.readyState < 2) { scheduleScan(100); return; }
+
+				let text = null;
+				try {
+					if (detector) {
+						const codes = await detector.detect(video);
+						if (codes && codes.length) text = codes[0].rawValue;
+					} else {
+						// Cắt hình vuông ở giữa (đúng ô ngắm) từ khung hình gốc, giữ nguyên độ phân giải
+						const side = Math.floor(Math.min(vw, vh) * SCAN_FRACTION);
+						const sx = Math.floor((vw - side) / 2), sy = Math.floor((vh - side) / 2);
+						const out = Math.min(side, MAX_DECODE_SIDE);
+						if (decodeCanvas.width !== out) { decodeCanvas.width = out; decodeCanvas.height = out; }
+						decodeCtx.drawImage(video, sx, sy, side, side, 0, 0, out, out);
+						const img = decodeCtx.getImageData(0, 0, out, out);
+						const code = jsQR(img.data, out, out, { inversionAttempts: 'dontInvert' });
+						if (code && code.data) text = code.data;
+					}
+				} catch (e) {
+					// BarcodeDetector lỗi trên máy này -> chuyển sang jsQR
+					if (detector) detector = null;
+				}
+
+				if (busy) return; // người dùng đã rời chế độ quét trong lúc giải mã
+				if (text) { onScanSuccess(text); return; }
+				scheduleScan(SCAN_INTERVAL_MS);
+			}
+
+			let lastText = null;    // mã vừa quét
+			let ignoreUntil = 0;    // bỏ qua mã vừa quét trong vài giây sau khi bấm "Quét mã tiếp"
 
 			function onScanSuccess(text) {
 				if (busy) return;
+				if (text === lastText && Date.now() < ignoreUntil) { scheduleScan(SCAN_INTERVAL_MS); return; }
+				lastText = text;
 				busy = true;
-				try { qr.pause(true); } catch (e) {}
+				clearTimeout(loopTimer);
 				processCheckin(decodeToken(tokenFromQrText(text)));
 			}
 
 			function showCameraError(err) {
-				scanning = false;
+				stopCamera();
 				scanHint.innerHTML = `<span class="error"><b>Không mở được camera.</b><br>Hãy cho phép trang truy cập camera rồi thử lại.</span>`
 					+ `<br><button onclick="startScanMode()">Thử lại</button>`;
 				console.error(err);
 			}
 
-			function startScanMode() {
+			async function startScanMode() {
 				// Bỏ ?token=... khỏi địa chỉ để tải lại trang không check-in lại khách cũ
 				if (window.location.search) {
 					history.replaceState(null, '', window.location.pathname);
@@ -244,34 +468,27 @@
 
 				box.classList.add('hidden');
 				scannerEl.classList.remove('hidden');
-				busy = false;
 
-				if (typeof Html5Qrcode === 'undefined') {
+				if (typeof jsQR === 'undefined') {
 					showCameraError('Không tải được thư viện quét QR');
 					return;
 				}
 
-				if (scanning) {
-					try { qr.resume(); } catch (e) {}
+				// Camera vẫn đang chạy từ lần quét trước -> chỉ cần quét tiếp
+				if (track && track.readyState === 'live') {
 					scanHint.textContent = 'Đưa mã QR vào khung để check-in';
+					ignoreUntil = Date.now() + 3000; // mã của khách vừa quét có thể vẫn còn trước camera
+					busy = false;
+					scheduleScan(0);
 					return;
 				}
 
-				if (!qr) qr = new Html5Qrcode('reader', { verbose: false });
-				scanHint.textContent = 'Đang mở camera...';
-				qr.start(
-					{ facingMode: 'environment' },
-					{ fps: 10, qrbox: function(w, h) { const s = Math.floor(Math.min(w, h) * 0.7); return { width: s, height: s }; } },
-					onScanSuccess,
-					function() {} // không đọc được mã ở khung hình này - bỏ qua
-				).then(function() {
-					scanning = true;
-					scanHint.textContent = 'Đưa mã QR vào khung để check-in';
-				}).catch(showCameraError);
+				if (!detector) await initDetector();
+				startCamera();
 			}
 
 			// Dọn mật khẩu cũ (không còn dùng) nếu còn lưu trên máy
-			try { localStorage.removeItem('BTC_CHECKIN_PASS'); } catch (e) {}
+			lsDel('BTC_CHECKIN_PASS');
 
 			// KIỂM TRA LUỒNG CHẠY BAN ĐẦU:
 			// - Mở từ link trong QR (có ?token=) -> check-in ngay khách đó.
