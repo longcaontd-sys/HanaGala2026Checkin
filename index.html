@@ -490,11 +490,22 @@
 			// Dọn mật khẩu cũ (không còn dùng) nếu còn lưu trên máy
 			lsDel('BTC_CHECKIN_PASS');
 
+			// Mở trang từ link trong QR (quét bằng app camera, Zalo...) -> KHÔNG check-in.
+			// Chỉ nhận check-in khi quét bằng chính trang này (chế độ quét bên dưới).
+			function showScanHereOnly() {
+				history.replaceState(null, '', window.location.pathname); // bỏ ?token=
+				showResult(`
+					<h2 class="error" style="margin-top: 0;">Chưa check-in</h2>
+					<p class="info" style="font-size: 16px;">Mã QR chỉ được nhận khi quét bằng trang check-in của Ban Tổ Chức.</p>
+					<button class="btn-big" onclick="startScanMode()">📷 Mở trang quét</button>
+				`);
+			}
+
 			// KIỂM TRA LUỒNG CHẠY BAN ĐẦU:
-			// - Mở từ link trong QR (có ?token=) -> check-in ngay khách đó.
+			// - Mở từ link trong QR (có ?token=) -> báo phải quét bằng trang này, không check-in.
 			// - Mở trang không có token -> vào chế độ quét QR bằng camera.
 			if (token) {
-				processCheckin(decodeToken(token));
+				showScanHereOnly();
 			} else {
 				startScanMode();
 			}
